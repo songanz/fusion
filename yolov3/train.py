@@ -16,35 +16,40 @@ import torch
 from torch.utils.data import DataLoader
 from torch.autograd import Variable
 
+kitti_weights = root_dir + 'pretrained_models/yolov3/kitti_best_032219.weights'
+checkpoint_dir = root_dir + 'training_logs/yolov3/checkpoints'
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--epochs", type=int, default=100, help="number of epochs")
 # parser.add_argument("--image_folder", type=str, default="data/samples", help="path to dataset for detection")
 parser.add_argument("--batch_size", type=int, default=10, help="size of each image batch")
-parser.add_argument("--model_config_path", type=str, default="config/yolov3-kitti.cfg", help="path to model config file")
-parser.add_argument("--data_config_path", type=str, default="config/kitti.data", help="path to data config file")
-parser.add_argument("--weights_path", type=str, default="checkpoints/98.weights",
+parser.add_argument("--model_config_path", type=str, default=root_dir + "config/yolov3-kitti.cfg",
+                    help="path to model config file")
+parser.add_argument("--data_config_path", type=str, default=root_dir + "config/kitti.data",
+                    help="path to data config file")
+parser.add_argument("--weights_path", type=str, default=kitti_weights,
                     help="path to weights file/ can use darknet53.conv.74")
-parser.add_argument("--class_path", type=str, default="data/kitti.names", help="path to class label file")
+parser.add_argument("--class_path", type=str, default=root_dir + "data/kitti.names", help="path to class label file")
 parser.add_argument("--iou_thres", type=float, default=0.5, help="iou threshold required to qualify as detected")
 parser.add_argument("--conf_thres", type=float, default=0.8, help="object confidence threshold")
 parser.add_argument("--nms_thres", type=float, default=0.4, help="iou thresshold for non-maximum suppression")
 parser.add_argument("--n_cpu", type=int, default=16, help="number of cpu threads to use during batch generation")
 parser.add_argument("--img_size", type=int, default=416, help="size of each image dimension")
 parser.add_argument("--checkpoint_interval", type=int, default=2, help="interval between saving model weights")
-parser.add_argument("--checkpoint_dir", type=str, default="checkpoints",
+parser.add_argument("--checkpoint_dir", type=str, default=checkpoint_dir,
                     help="directory where model checkpoints are saved")
 parser.add_argument("--use_cuda", type=bool, default=True, help="whether to use cuda if available")
 opt = parser.parse_args()
 print(opt)
 my_dataset = opt.data_config_path
-print('use'+ my_dataset)
+print('use' + my_dataset)
 freeze_backbone = 1
 vis = Visualizer('yolo v3')
 
 cuda = torch.cuda.is_available() and opt.use_cuda
 
-os.makedirs("output", exist_ok=True)
-os.makedirs("checkpoints", exist_ok=True)
+# os.makedirs("output", exist_ok=True)
+# os.makedirs("checkpoints", exist_ok=True)
 
 classes = load_classes(opt.class_path)
 
@@ -69,9 +74,9 @@ num_classes = int(data_config["classes"])
 # print(weights_path_latest)
 # Initiate model
 model = Darknet(opt.model_config_path)
-#model.apply(weights_init_normal)
+# model.apply(weights_init_normal)
 model.load_weights(opt.weights_path)
-#model.apply(weights_init_normal)
+# model.apply(weights_init_normal)
 
 if cuda:
     model = model.cuda()
@@ -124,8 +129,8 @@ for epoch in range(opt.epochs):
         loss = model(imgs, targets)
 
         loss.backward()
-        #optimizer.step()
-                # accumulate gradient for x batches before optimizing
+        # optimizer.step()
+        # accumulate gradient for x batches before optimizing
         if ((batch_i + 1) % accumulated_batches == 0) or (batch_i == len(dataloader) - 1):
             optimizer.step()
             optimizer.zero_grad()
@@ -153,14 +158,14 @@ for epoch in range(opt.epochs):
             vis.plot('Total Loss',batch_loss)
             losses_x = losses_y = losses_w = losses_h = losses_conf = losses_cls = losses_recall = losses_precision = batch_loss= 0.0
         
-        #imgs_num = 1
-        loss_data = "%.5f\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f\n"% (
-                model.losses["x"] ,
-                model.losses["y"] ,
-                model.losses["w"] ,
-                model.losses["h"] ,
-                model.losses["conf"] ,
-                model.losses["cls"] ,
+        # imgs_num = 1
+        loss_data = "%.5f\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f\n" % (
+                model.losses["x"],
+                model.losses["y"],
+                model.losses["w"],
+                model.losses["h"],
+                model.losses["conf"],
+                model.losses["cls"],
                 loss.item(),
                 model.losses["recall"] ,
                 model.losses["precision"],
@@ -186,11 +191,11 @@ for epoch in range(opt.epochs):
         )
 
         model.seen += imgs.size(0)
-	
+
     if epoch % opt.checkpoint_interval == 0:
         model.save_weights("%s/%d.weights" % (opt.checkpoint_dir, epoch))
         
-    #mean_AP = test_model(test_dataloader, test_data_file, model)
+    # mean_AP = test_model(test_dataloader, test_data_file, model)
     print("Compute %d Epoch mAP..." % epoch)
 
     all_detections = []
@@ -301,7 +306,7 @@ for epoch in range(opt.epochs):
     mAP = np.mean(list(average_precisions.values()))
     # print(f"mAP: {mAP}")  # for python3.6
     print("mAP: {}".format(mAP))
-    test_data_file.write("%.5f\n"% mAP)
+    test_data_file.write("%.5f\n" % mAP)
     
     if mAP > best_mAP:
         best_mAP = mAP

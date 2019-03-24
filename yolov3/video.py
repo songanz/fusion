@@ -41,14 +41,14 @@ def prep_image(img, inp_dim):
     orig_im = img
     dim = orig_im.shape[1], orig_im.shape[0]
     img = cv2.resize(orig_im, (inp_dim, inp_dim))
-    img_ = img[:,:,::-1].transpose((2,0,1)).copy()
+    img_ = img[:, :, ::-1].transpose((2, 0, 1)).copy()
     img_ = torch.from_numpy(img_).float().div(255.0).unsqueeze(0)
     return img_, orig_im, dim
 
 
 def resize_img(img, img_size=416):
     h, w, _ = img.shape
-    dim_diff = np.abs(h - w)
+    dim_diff = np的.abs(h - w)
     # Upper (left) and lower (right) padding
     pad1, pad2 = dim_diff // 2, dim_diff - dim_diff // 2
     # Determine padding

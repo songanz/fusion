@@ -22,13 +22,15 @@ import matplotlib.patches as patches
 from matplotlib.ticker import NullLocator
 
 
-kitti_weights = 'weights/kitti.weights'
+kitti_weights = root_dir + 'pretrained_models/yolov3/yolov3-kitti.weights'
+images = root_dir + 'data/kitti/object/testing/image_2/'
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--image_folder', type=str, default='data/samples/', help='path to dataset for detection')
-parser.add_argument('--config_path', type=str, default='config/yolov3-kitti.cfg', help='path to model config file')
+parser.add_argument('--image_folder', type=str, default=images, help='path to dataset for detection')
+parser.add_argument('--config_path', type=str, default=root_dir + 'config/yolov3-kitti.cfg',
+                    help='path to model config file')
 parser.add_argument('--weights_path', type=str, default=kitti_weights, help='path to weights file')
-parser.add_argument('--class_path', type=str, default='data/kitti.names', help='path to class label file')
+parser.add_argument('--class_path', type=str, default=root_dir + 'data/kitti.names', help='path to class label file')
 parser.add_argument('--conf_thres', type=float, default=0.8, help='object confidence threshold')
 parser.add_argument('--nms_thres', type=float, default=0.4, help='iou thresshold for non-maximum suppression')
 parser.add_argument('--batch_size', type=int, default=1, help='size of the batches')
@@ -41,7 +43,7 @@ print(opt)
 
 cuda = torch.cuda.is_available() and opt.use_cuda
 
-os.makedirs('output', exist_ok=True)
+os.makedirs('output', exist_ok=True)  # for saving output image
 
 # Set up model
 model = Darknet(opt.config_path, img_size=opt.img_size)
@@ -51,7 +53,7 @@ if cuda:
     model.cuda()
     print("using cuda model")
 
-model.eval() # Set in evaluation mode
+model.eval()  # Set in evaluation mode
 
 dataloader = DataLoader(ImageFolder(opt.image_folder, img_size=opt.img_size),
                         batch_size=opt.batch_size, shuffle=False, num_workers=opt.n_cpu)
@@ -89,8 +91,8 @@ for batch_i, (img_paths, input_imgs) in enumerate(dataloader):
     img_detections.extend(detections)
 
 # Bounding-box colors
-#cmap = plt.get_cmap('tab20b')
-cmap = plt.get_cmap('Vega20b')
+cmap = plt.get_cmap('tab20b')
+# cmap = plt.get_cmap('Vega20b')
 colors = [cmap(i) for i in np.linspace(0, 1, 20)]
 
 print ('\nSaving images:')

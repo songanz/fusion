@@ -15,6 +15,7 @@ import matplotlib.patches as patches
 from skimage.transform import resize
 
 import sys
+root_dir = "/home/songanz/Documents/Git_repo/fusion/"
 
 class ImageFolder(Dataset):
     def __init__(self, folder_path, img_size=416):
@@ -48,17 +49,22 @@ class ImageFolder(Dataset):
 
 class ListDataset(Dataset):
     def __init__(self, list_path, img_size=416):
+        self.img_files = []
         with open(list_path, 'r') as file:
-            self.img_files = file.readlines()
-        self.label_files = [path.replace('images', 'labels').replace('.png', '.txt').replace('.jpg', '.txt') for path in self.img_files]
+            for line in file.readlines():
+                line = line.split('\n')[0]
+                self.img_files.append(root_dir + "data/kitti/object/training/image_2/" + line + ".png")
+        self.label_files = \
+            [path.replace('image_2', 'label_coco_format').replace('.png', '.txt').replace('.jpg', '.txt')
+             for path in self.img_files]
         self.img_shape = (img_size, img_size)
         self.max_objects = 50
 
     def __getitem__(self, index):
 
-        #---------
-        #  Image
-        #---------
+        ###########
+        #  Image  #
+        ###########
 
         img_path = self.img_files[index % len(self.img_files)].rstrip()
         img = np.array(Image.open(img_path))
@@ -85,9 +91,9 @@ class ListDataset(Dataset):
         # As pytorch tensor
         input_img = torch.from_numpy(input_img).float()
 
-        #---------
-        #  Label
-        #---------
+        ###########
+        #  Label  #
+        ###########
 
         label_path = self.label_files[index % len(self.img_files)].rstrip()
 

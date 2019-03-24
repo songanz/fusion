@@ -66,3 +66,5 @@ data/KITTI/labels/
 data/kitti/object/
 
 data/kitti/tracking/
+
+yolov3/output/

@@ -81,13 +81,13 @@ class DatasetFrustumPointNetAugmentation(torch.utils.data.Dataset):
 
         self.NH = NH
 
-        with open(kitti_meta_path + "/%s_img_ids.pkl" % type, "rb") as file: # (needed for python3)
+        with open(kitti_meta_path + "/%s_img_ids.pkl" % type, "rb") as file:  # (needed for python3)
             img_ids = pickle.load(file)
 
-        with open(kitti_meta_path + "/kitti_train_mean_car_size.pkl", "rb") as file: # (needed for python3)
+        with open(kitti_meta_path + "/kitti_train_mean_car_size.pkl", "rb") as file:  # (needed for python3)
             self.mean_car_size = pickle.load(file)
 
-        with open(kitti_meta_path + "/kitti_centered_frustum_mean_xyz.pkl", "rb") as file: # (needed for python3)
+        with open(kitti_meta_path + "/kitti_centered_frustum_mean_xyz.pkl", "rb") as file:  # (needed for python3)
             self.centered_frustum_mean_xyz = pickle.load(file)
             self.centered_frustum_mean_xyz = self.centered_frustum_mean_xyz.astype(np.float32)
 
