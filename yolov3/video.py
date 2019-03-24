@@ -48,7 +48,7 @@ def prep_image(img, inp_dim):
 
 def resize_img(img, img_size=416):
     h, w, _ = img.shape
-    dim_diff = np的.abs(h - w)
+    dim_diff = np.abs(h - w)
     # Upper (left) and lower (right) padding
     pad1, pad2 = dim_diff // 2, dim_diff - dim_diff // 2
     # Determine padding
