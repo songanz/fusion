@@ -417,19 +417,21 @@ small_img_width = 620
 class ImgCreatorLiDAR:
     def __init__(self):
         self.counter = 0
-        self.trajectory = read_pinhole_camera_trajectory(root_dir + "visualization/camera_trajectory.json") # NOTE! you'll have to adapt this for your file structure
+        # NOTE! you'll have to adapt this for your file structure
+        self.param = read_pinhole_camera_parameters(
+            root_dir + "visualization/camera_trajectory/" + sequence + ".json")
 
     def move_forward(self, vis):
         # this function is called within the Visualizer::run() loop.
         # the run loop calls the function, then re-renders the image.
+        ctr = vis.get_view_control()
+        # set the camera view:
+        ctr.convert_from_pinhole_camera_parameters(self.param)
 
-        if self.counter < 2: # (the counter is for making sure the camera view has been changed before the img is captured)
-            # set the camera view:
-            ctr = vis.get_view_control()
-            ctr.convert_from_pinhole_camera_parameters(self.trajectory.intrinsic, self.trajectory.extrinsic[0])
+        self.counter += 1
 
-            self.counter += 1
-        else:
+        # (the counter is for making sure the camera view has been changed before the img is captured)
+        if self.counter > 3:
             # capture an image:
             img = vis.capture_screen_float_buffer()
             img = 255*np.asarray(img)
@@ -760,7 +762,7 @@ class ImgCreatorLiDAR:
 ################################################################################
 # create a video of image and LiDAR with GT and pred:
 ################################################################################
-out_lidar_img_GT_pred = cv2.VideoWriter("eval_val_seq_%s_lidar_img_GT_pred.avi" % sequence, cv2.VideoWriter_fourcc(*'H264'), 12, (1920, 1080), True)
+out_lidar_img_GT_pred = cv2.VideoWriter("eval_val_seq_%s_lidar_img_GT_pred.mp4" % sequence, cv2.VideoWriter_fourcc(*'mp4v'), 12, (1855, 1080), True)
 
 lidar_img_creator = ImgCreatorLiDAR()
 for img_id in sorted_img_ids:
@@ -809,6 +811,6 @@ for img_id in sorted_img_ids:
     img_lidar = lidar_img_creator.create_img(gt_bboxes + pred_bboxes + [pcd])
 
     combined_img = img_lidar
-    combined_img[-small_img_height:, ((1920/2)-(small_img_width/2)):((1920/2)+(small_img_width/2))] = small_img_with_bboxes
+    combined_img[-small_img_height:, int((1855/2)-(small_img_width/2)):int((1855/2)+(small_img_width/2))] = small_img_with_bboxes
 
     out_lidar_img_GT_pred.write(combined_img)

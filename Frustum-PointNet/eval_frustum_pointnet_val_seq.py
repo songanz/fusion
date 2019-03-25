@@ -74,11 +74,11 @@ for step, (frustum_point_clouds, labels_InstanceSeg, labels_TNet, labels_BboxNet
         labels_corner_flipped = labels_corner_flipped.cuda()
 
         outputs = network(frustum_point_clouds)
-        outputs_InstanceSeg = outputs[0] # (shape: (batch_size, num_points, 2))
-        outputs_TNet = outputs[1] # (shape: (batch_size, 3))
-        outputs_BboxNet = outputs[2] # (shape: (batch_size, 3 + 3 + 2*NH))
-        seg_point_clouds_mean = outputs[3] # (shape: (batch_size, 3))
-        dont_care_mask = outputs[4] # (shape: (batch_size, ))
+        outputs_InstanceSeg = outputs[0]  # (shape: (batch_size, num_points, 2))
+        outputs_TNet = outputs[1]  # (shape: (batch_size, 3))
+        outputs_BboxNet = outputs[2]  # (shape: (batch_size, 3 + 3 + 2*NH))
+        seg_point_clouds_mean = outputs[3]  # (shape: (batch_size, 3))
+        dont_care_mask = outputs[4]  # (shape: (batch_size, ))
 
         ############################################################################
         # save data for visualization:
