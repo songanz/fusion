@@ -78,16 +78,16 @@ def arg_parse():
     parser.add_argument("--reso", dest = 'reso', help = 
                         "Input resolution of the network. Increase to increase accuracy. Decrease to increase speed",
                         default = "416", type = str)
-    parser.add_argument("--videl", dest="video", help="Video file path",
+    parser.add_argument("--video", dest="video", help="Video file path",
                         default="/media/songanz/New Volume/data/Mcity_data/12_05/front_60/1-s-1.mkv", type=str)
     return parser.parse_args()
 
 
 if __name__ == '__main__':
-    cfgfile = 'config/yolov3-kitti.cfg'
-    weightsfile = "weights/yolov3-kitti.weights"
+    cfgfile = root_dir + 'config/yolov3-kitti.cfg'
+    weightsfile = root_dir + "pretrained_models/yolov3/yolov3-kitti.weights"
     num_classes = 8
-    classes = load_classes('data/kitti.names')
+    classes = load_classes(root_dir + 'data/kitti.names')
     cvfont = cv2.FONT_HERSHEY_PLAIN
     # Bounding-box colors
     cmap = plt.get_cmap('tab20b')
@@ -186,8 +186,8 @@ if __name__ == '__main__':
                     cv2.rectangle(img, (int(x1),int(y1)), (int(x2),int(y2)), (color[0]*255,color[1]*255,color[2]*255), 1)
             cv2.imshow('frame', img)
             # free buffer
-            #cv2.imshow('kitti detecting window',plt)
-            #plt.savefig('output/%d.png' % (img_i), bbox_inches='tight', pad_inches=0.0)
+            # cv2.imshow('kitti detecting window',plt)
+            # plt.savefig('output/%d.png' % (img_i), bbox_inches='tight', pad_inches=0.0)
             key = cv2.waitKey(1)  
             if key & 0xFF == ord('q'):
                 break  

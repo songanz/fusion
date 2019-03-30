@@ -84,7 +84,7 @@ for step, (frustum_point_clouds, labels_InstanceSeg, labels_TNet, labels_BboxNet
         # save data for visualization:
         ############################################################################
         centered_frustum_mean_xyz = centered_frustum_mean_xyz[0].numpy()
-        for i in range(outputs_InstanceSeg.size()[0]):
+        for i in range(outputs_InstanceSeg.size()[0]):  # for each batch
             dont_care_mask_value = dont_care_mask[i]
 
             # don't care about predicted 3Dbboxes that corresponds to empty point clouds outputted by InstanceSeg:
@@ -103,6 +103,7 @@ for step, (frustum_point_clouds, labels_InstanceSeg, labels_TNet, labels_BboxNet
                 decentered_frustum_point_cloud_xyz = np.dot(np.linalg.inv(frustum_R), unshifted_frustum_point_cloud_xyz.T).T
                 frustum_point_cloud[:, 0:3] = decentered_frustum_point_cloud_xyz
 
+                # points belong to car object
                 row_mask = pred_InstanceSeg[:, 1] > pred_InstanceSeg[:, 0]
                 pred_seg_point_cloud = frustum_point_cloud[row_mask, :]
 

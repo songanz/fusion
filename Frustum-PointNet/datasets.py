@@ -847,7 +847,7 @@ class EvalSequenceDatasetFrustumPointNet(torch.utils.data.Dataset):
         self.img_dir = kitti_data_path + "/tracking/training/image_02/" + sequence + "/"
         self.lidar_dir = kitti_data_path + "/tracking/training/velodyne/" + sequence + "/"
         self.label_path = kitti_data_path + "/tracking/training/label_02/" + sequence + ".txt"
-        self.calib_path = kitti_meta_path + "/tracking/training/calib/" + sequence + ".txt" # NOTE! NOTE! the data format for the calib files was sliightly different for tracking, so I manually modifed the 20 files and saved them in the kitti_meta folder
+        self.calib_path = kitti_meta_path + "/tracking/training/calib/" + sequence + ".txt" # NOTE! NOTE! the data format for the calib files was slightly different for tracking, so I manually modifed the 20 files and saved them in the kitti_meta folder
 
         self.NH = NH
 
