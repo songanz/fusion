@@ -39,6 +39,9 @@ from yolov3.models import *
 from utils.utils_yolo import *
 from yolov3.datasets import *
 
+sys.path.append(root_dir + "Open3D/build/lib")
+import open3d
+
 ############### Set up path ##########################
 F_weights = root_dir + "pretrained_models/model_37_2_epoch_400.pth"
 
@@ -64,6 +67,11 @@ classes = load_classes(root_dir + 'data/kitti.names')
 cmap = plt.get_cmap('tab20b')
 colors = [cmap(i) for i in np.linspace(0, 1, 20)]
 cvfont = cv2.FONT_HERSHEY_PLAIN
+
+count_empty = 0  # for count how many 2D detection end up with no 3D detection
+pre_frame_pred_seg = {}  # previous frame predection, stored for tracking
+cur_frame_pred_seg = {}
+threshold_icp = 0.05
 
 ################ Load Networks #######################
 F_network = FrustumPointNet("Frustum-PointNet_eval_val_seq", project_dir=root_dir)
@@ -128,6 +136,8 @@ for frame in range(len(os.listdir(img_dir))):
     unpad_h = kitti_img_size - pad_y
     unpad_w = kitti_img_size - pad_x
 
+    cur_frame_pred_seg = {}
+
     ######################## Debug visulization  #######################
     # if detection is not None:
     #     # print(img.shape)
@@ -157,7 +167,7 @@ for frame in range(len(os.listdir(img_dir))):
     ####################################################################
 
     # for each bounding box in each frame
-    for x1, y1, x2, y2, conf, cls_conf, cls_pred in detection_Y:
+    for b_indx, [x1, y1, x2, y2, conf, cls_conf, cls_pred] in enumerate(detection_Y):
         # Rescale coordinates to original dimensions
         cls_pred = min(cls_pred, 8)  # refer to kitti.names
         print ('\t+ Label: %s, Conf: %.5f' % (classes[int(cls_pred)], cls_conf.item()))
@@ -242,9 +252,11 @@ for frame in range(len(os.listdir(img_dir))):
         x_center = (x2 - x1)/2 + x1
         y_center = (y2 - y1)/2 + y1
         center_img_point_hom = np.array([x_center, y_center, 1])
+
         # (more than one 3D point is projected onto the center image point, i.e,
         # the linear system of equations is under-determined and has inf number
         # of solutions. By using the pseudo-inverse, we obtain the least-norm sol)
+
         # get a point (the least-norm sol.) that projects onto the center image point, in hom. coords:
         P2_pseudo_inverse = np.linalg.pinv(P2)  # (shape: (4, 3)) (P2 has shape (3, 4))
         point_hom = np.dot(P2_pseudo_inverse, center_img_point_hom)
@@ -280,93 +292,144 @@ for frame in range(len(os.listdir(img_dir))):
         centered_frustum_point_cloud_camera = frustum_point_cloud_camera
         centered_frustum_point_cloud_camera[:, 0:3] = centered_frustum_point_cloud_xyz_camera
 
+        # for input to F_network
         centered_frustum_point_cloud_camera = centered_frustum_point_cloud_camera[np.newaxis, :, :]
         centered_frustum_point_cloud_camera = torch.from_numpy(centered_frustum_point_cloud_camera) # (shape: (1024, 4))
-        centered_frustum_point_cloud_camera = Variable(centered_frustum_point_cloud_camera)
-        centered_frustum_point_cloud_camera = centered_frustum_point_cloud_camera.transpose(2, 1)
-        centered_frustum_point_cloud_camera = centered_frustum_point_cloud_camera.cuda()
+        centered_frustum_point_cloud_camera = Variable(centered_frustum_point_cloud_camera).transpose(2, 1).cuda()
 
         # Detection from the F_network
         detection_F = F_network(centered_frustum_point_cloud_camera)  # centered_frustum_point_cloud_camera
 
+        # get segmentation
         detection_InstanceSeg = detection_F[0][0].data.cpu().numpy()
         row_mask_pred = detection_InstanceSeg[:, 1] > detection_InstanceSeg[:, 0]
-
         pred_seg_point_cloud = frustum_point_cloud[row_mask_pred, :]
 
-        # Calcualte fps for frustum
-        current_time_frustum = time.time()
-        inference_time_frustum = current_time_frustum - current_time_yolo
-        fps_frustum = int(1 / inference_time_frustum)
-        print ("fps_frustum: ", fps_frustum)
-        print ("fps_total: ", int(1 / (inference_time_frustum + inference_time_yolo)))
-
+        # get the physical center of that segmentation
+        detection_TNet = detection_F[1][0].data.cpu().numpy()
+        detection_TNet += np.mean(pred_seg_point_cloud, axis=0)[0:3]
 
         ############################ Debug visulization  ############################
-
-        sys.path.append(root_dir + "Open3D/build/lib")
-        import open3d
-
-        axis = open3d.create_mesh_coordinate_frame(size=1, origin=[0, 0, 0])
-
-        # visualize all transfermation in order to make sure they are exactly what I want
-        # 1. point_cloud_ori
-        point_cloud_ori_viz = open3d.PointCloud()
-        point_cloud_ori_viz.points = open3d.Vector3dVector(point_cloud_ori[:, 0:3])
-        point_cloud_ori_viz.paint_uniform_color([0.25, 0.25, 0.25])  # black
-
-        # 2. point_cloud_xyz
-        point_cloud_xyz_viz = open3d.PointCloud()
-        point_cloud_xyz_viz.points = open3d.Vector3dVector(point_cloud_ori[:, 0:3])
-        point_cloud_xyz_viz.paint_uniform_color([0, 0, 1])  # blue
-
-        # 3. point_cloud_xyz_hom
-        point_cloud_xyz_hom_viz = open3d.PointCloud()
-        point_cloud_xyz_hom_viz.points = open3d.Vector3dVector(point_cloud_xyz_hom[:, 0:3])
-        point_cloud_xyz_hom_viz.paint_uniform_color([1, 0, 0])  # red
-
-        # 4. img_points_hom
-        img_points_hom_viz = open3d.PointCloud()
-        img_points_hom_viz.points = open3d.Vector3dVector(img_points_hom[:, 0:3])
-        img_points_hom_viz.paint_uniform_color([0, 1, 0])  # green
-
-        # 5. img_points cannot be visualized as point cloud
-
-        # 6. point_cloud_xyz_camera_hom
-        point_cloud_xyz_camera_hom_viz = open3d.PointCloud()
-        point_cloud_xyz_camera_hom_viz.points = open3d.Vector3dVector(point_cloud_xyz_camera_hom[:, 0:3])
-        point_cloud_xyz_camera_hom_viz.paint_uniform_color([0, 1, 0])  # green
-
-        # 7. point_cloud_camera
-        point_cloud_camera_viz = open3d.PointCloud()
-        point_cloud_camera_viz.points = open3d.Vector3dVector(point_cloud_camera[:, 0:3])
-        point_cloud_camera_viz.paint_uniform_color([1, 0, 0])  # red
-
-        # 8. frustum_point_cloud
-        frustum_point_cloud_viz = open3d.PointCloud()
-        frustum_point_cloud_viz.points = open3d.Vector3dVector(frustum_point_cloud[:, 0:3])
-        frustum_point_cloud_viz.paint_uniform_color([0, 1, 0])  # green
-
-        # 9. frustum_point_cloud_camera
-        frustum_point_cloud_camera_viz = open3d.PointCloud()
-        frustum_point_cloud_camera_viz.points = open3d.Vector3dVector(frustum_point_cloud_camera[:, 0:3])
-        frustum_point_cloud_camera_viz.paint_uniform_color([1, 0, 0])  # red
-
-        # 10. centered_frustum_point_cloud_camera
-        centered_frustum_point_cloud_camera_viz = open3d.PointCloud()
-        centered_frustum_point_cloud_camera_viz.points = open3d.Vector3dVector(centered_frustum_point_cloud_xyz_camera[:, 0:3])
-        centered_frustum_point_cloud_camera_viz.paint_uniform_color([1, 0, 0])  # red
-
-        # 11. pred_seg_point_cloud
-        pred_seg_point_cloud_viz = open3d.PointCloud()
-        pred_seg_point_cloud_viz.points = open3d.Vector3dVector(pred_seg_point_cloud[:, 0:3])
-        pred_seg_point_cloud_viz.paint_uniform_color([0.25, 0.25, 0.25])  # black
-
-        open3d.draw_geometries([pred_seg_point_cloud_viz, frustum_point_cloud_viz, point_cloud_camera_viz, axis])
-
+        #
+        # axis = open3d.create_mesh_coordinate_frame(size=1, origin=[0, 0, 0])
+        #
+        # # visualize all transfermation in order to make sure they are exactly what I want
+        # # 1. point_cloud_ori
+        # point_cloud_ori_viz = open3d.PointCloud()
+        # point_cloud_ori_viz.points = open3d.Vector3dVector(point_cloud_ori[:, 0:3])
+        # point_cloud_ori_viz.paint_uniform_color([0.25, 0.25, 0.25])  # black
+        #
+        # # 2. point_cloud_xyz
+        # point_cloud_xyz_viz = open3d.PointCloud()
+        # point_cloud_xyz_viz.points = open3d.Vector3dVector(point_cloud_ori[:, 0:3])
+        # point_cloud_xyz_viz.paint_uniform_color([0, 0, 1])  # blue
+        #
+        # # 3. point_cloud_xyz_hom
+        # point_cloud_xyz_hom_viz = open3d.PointCloud()
+        # point_cloud_xyz_hom_viz.points = open3d.Vector3dVector(point_cloud_xyz_hom[:, 0:3])
+        # point_cloud_xyz_hom_viz.paint_uniform_color([1, 0, 0])  # red
+        #
+        # # 4. img_points_hom
+        # img_points_hom_viz = open3d.PointCloud()
+        # img_points_hom_viz.points = open3d.Vector3dVector(img_points_hom[:, 0:3])
+        # img_points_hom_viz.paint_uniform_color([0, 1, 0])  # green
+        #
+        # # 5. img_points cannot be visualized as point cloud
+        #
+        # # 6. point_cloud_xyz_camera_hom
+        # point_cloud_xyz_camera_hom_viz = open3d.PointCloud()
+        # point_cloud_xyz_camera_hom_viz.points = open3d.Vector3dVector(point_cloud_xyz_camera_hom[:, 0:3])
+        # point_cloud_xyz_camera_hom_viz.paint_uniform_color([0, 1, 0])  # green
+        #
+        # # 7. point_cloud_camera
+        # point_cloud_camera_viz = open3d.PointCloud()
+        # point_cloud_camera_viz.points = open3d.Vector3dVector(point_cloud_camera[:, 0:3])
+        # point_cloud_camera_viz.paint_uniform_color([1, 0, 0])  # red
+        #
+        # # 8. frustum_point_cloud
+        # frustum_point_cloud_viz = open3d.PointCloud()
+        # frustum_point_cloud_viz.points = open3d.Vector3dVector(frustum_point_cloud[:, 0:3])
+        # frustum_point_cloud_viz.paint_uniform_color([0, 1, 0])  # green
+        #
+        # # 9. frustum_point_cloud_camera
+        # frustum_point_cloud_camera_viz = open3d.PointCloud()
+        # frustum_point_cloud_camera_viz.points = open3d.Vector3dVector(frustum_point_cloud_camera[:, 0:3])
+        # frustum_point_cloud_camera_viz.paint_uniform_color([1, 0, 0])  # red
+        #
+        # # 10. centered_frustum_point_cloud_camera
+        # centered_frustum_point_cloud_camera_viz = open3d.PointCloud()
+        # centered_frustum_point_cloud_camera_viz.points = open3d.Vector3dVector(centered_frustum_point_cloud_xyz_camera[:, 0:3])
+        # centered_frustum_point_cloud_camera_viz.paint_uniform_color([1, 0, 0])  # red
+        #
+        # # 11. pred_seg_point_cloud
+        # pred_seg_point_cloud_viz = open3d.PointCloud()
+        # pred_seg_point_cloud_viz.points = open3d.Vector3dVector(pred_seg_point_cloud[:, 0:3])
+        # pred_seg_point_cloud_viz.paint_uniform_color([0.25, 0.25, 0.25])  # black
+        #
+        # # 12. detection_TNet
+        # detection_TNet_viz = open3d.PointCloud()
+        # detection_TNet_viz.points = open3d.Vector3dVector(detection_TNet[np.newaxis, :])
+        # detection_TNet_viz.paint_uniform_color([0, 0, 1])  # blue
+        #
+        # open3d.draw_geometries([pred_seg_point_cloud_viz, frustum_point_cloud_viz, point_cloud_camera_viz, detection_TNet_viz, axis])
+        #
         #############################################################################
+
+        if pred_seg_point_cloud.size == 0:
+            count_empty += 1
+            continue
+
         distance_pred_seg = np.min(pred_seg_point_cloud[:,0]**2 + pred_seg_point_cloud[:,1]**2 + pred_seg_point_cloud[:,2]**2)
         distance_pred_seg = np.sqrt(distance_pred_seg)
-        print (distance_pred_seg)
-        # print (detection_F[0])
-        
+        print ("frame: ", frame, "  b_indx: ", b_indx, "    distance: ", distance_pred_seg)
+        print ("count empty: ", count_empty)
+
+        cur_frame_pred_seg[b_indx] = [pred_seg_point_cloud, detection_TNet, distance_pred_seg]
+
+        if pre_frame_pred_seg:
+            dist = 100  # for calculate the distance between frames
+            for scoure in pre_frame_pred_seg:
+                center_pre = pre_frame_pred_seg[scoure][1]
+                dist_temp = np.linalg.norm(center_pre-detection_TNet)
+
+                if dist_temp < dist:
+                    dist = dist_temp
+                    source_id = scoure
+                    range_pre = pre_frame_pred_seg[scoure][2]
+
+            if dist < 3:
+                range_rate = (distance_pred_seg - range_pre)*10
+
+            print ("Range: ", distance_pred_seg, "  Range_pre: ", range_pre, "    Range_rate:", range_rate)
+
+        ############################ Debug visulization  ############################
+        #
+        # current_pc = open3d.PointCloud()
+        # current_pc.points = open3d.Vector3dVector(pred_seg_point_cloud[:, 0:3])
+        #
+        # if pre_frame_pred_seg:
+        #     pre_pc = open3d.PointCloud()
+        #     pre_pc.points = open3d.Vector3dVector(pre_frame_pred_seg[source_id][0][:, 0:3])
+        #     # for source in pre_frame_pred_seg:
+        #     #     source_pc = open3d.PointCloud()
+        #     #     source_pc.points = open3d.Vector3dVector(pre_frame_pred_seg[source][0][:, 0:3])
+        #         # reg_p2p = open3d.registration_icp(source_pc, target_pc, threshold_icp, np.eye(4),
+        #         #                                   open3d.TransformationEstimationPointToPoint(),
+        #         #                                   open3d.ICPConvergenceCriteria(max_iteration = 2000))
+        #         # print (reg_p2p.transformation)
+        #
+        #     current_pc.paint_uniform_color([0, 1, 0])  # green
+        #     pre_pc.paint_uniform_color([1, 0, 0])  # red
+        #     axis = open3d.create_mesh_coordinate_frame(size=1, origin=[0, 0, 0])
+        #     open3d.draw_geometries([current_pc, pre_pc, axis])
+        #
+        #############################################################################
+
+    pre_frame_pred_seg = cur_frame_pred_seg
+
+    # Calcualte fps for frustum_pointnet detection
+    current_time_frustum = time.time()
+    inference_time_frustum = current_time_frustum - current_time_yolo
+    fps_frustum = int(1 / inference_time_frustum)
+    print("fps_frustum: ", fps_frustum)
+    print("fps_total: ", int(1 / (inference_time_frustum + inference_time_yolo)))
