@@ -70,8 +70,6 @@ def arg_parse():
     Parse arguements to the detect module
     
     """
-    
-    
     parser = argparse.ArgumentParser(description='YOLO v3 Cam Demo')
     parser.add_argument("--confidence", dest = "confidence", help = "Object Confidence to filter predictions", default = 0.25)
     parser.add_argument("--nms_thresh", dest = "nms_thresh", help = "NMS Threshhold", default = 0.4)
@@ -106,8 +104,8 @@ if __name__ == '__main__':
     model = Darknet(cfgfile)
     model.load_weights(weightsfile)
     
-    #model.net_info["height"] = args.reso
-    #inp_dim = int(model.net_info["height"])
+    # model.net_info["height"] = args.reso
+    # inp_dim = int(model.net_info["height"])
     inp_dim = int(args.reso)
     assert inp_dim % 32 == 0 
     assert inp_dim > 32

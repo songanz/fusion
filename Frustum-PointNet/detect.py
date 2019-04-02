@@ -1,6 +1,7 @@
 # camera-ready
 '''
 Use the yolov3 2D boundbox to get the frustum points and run the frustum detection
+Then calculate the range and range_rate
 '''
 
 from __future__ import division
@@ -14,6 +15,7 @@ import torch.nn as nn
 from torch.autograd import Variable
 import torch.optim as optim
 import torch.nn.functional as F
+import copy
 
 import numpy as np
 import pickle
@@ -42,13 +44,13 @@ from yolov3.datasets import *
 sys.path.append(root_dir + "Open3D/build/lib")
 import open3d
 
-############### Set up path ##########################
+''''''''''''''''''''' Set up path '''''''''''''''''''''
 F_weights = root_dir + "pretrained_models/model_37_2_epoch_400.pth"
 
 Y_weights = root_dir + 'pretrained_models/yolov3/yolov3-kitti.weights'
 Y_cfgfile = root_dir + 'config/yolov3-kitti.cfg'
 
-sequence = "0004"
+sequence = "0003"
 kitti_data_dir=root_dir + "data/kitti"
 kitti_meta_dir=root_dir + "data/kitti/meta"
 img_dir = kitti_data_dir + "/tracking/training/image_02/" + sequence + "/"
@@ -61,19 +63,35 @@ img_list.sort()
 lidar_list = os.listdir(lidar_dir)
 lidar_list.sort()
 
-############# Set up useful constant #################
+''''''''''''''''''''' Set up useful constant '''''''''''''''''''''
 classes = load_classes(root_dir + 'data/kitti.names')
+
 # for visualization Yolov3
-cmap = plt.get_cmap('tab20b')
+cmap = plt.get_cmap('tab20')
 colors = [cmap(i) for i in np.linspace(0, 1, 20)]
 cvfont = cv2.FONT_HERSHEY_PLAIN
 
-count_empty = 0  # for count how many 2D detection end up with no 3D detection
+count_empty_frustum = 0  # for count how many 2D detection end up with no 3D detection
+count_empty_pred = 0
 pre_frame_pred_seg = {}  # previous frame predection, stored for tracking
 cur_frame_pred_seg = {}
-threshold_icp = 0.05
+fps_frames_yolo = []
+fps_frames_frustum = []
+fps_frames_total = []
 
-################ Load Networks #######################
+# Get calibration
+calib = calibread(calib_path)
+P2 = calib["P2"]
+Tr_velo_to_cam_orig = calib["Tr_velo_to_cam"]  # Rigid transformation from Velodyne to (non-rectified) camera coordinates
+R0_rect_orig = calib["R0_rect"]
+
+R0_rect = np.eye(4)
+R0_rect[0:3, 0:3] = R0_rect_orig
+
+Tr_velo_to_cam = np.eye(4)
+Tr_velo_to_cam[0:3, :] = Tr_velo_to_cam_orig
+
+''''''''''''''''''''' Load Networks '''''''''''''''''''''
 F_network = FrustumPointNet("Frustum-PointNet_eval_val_seq", project_dir=root_dir)
 F_network.load_state_dict(torch.load(F_weights))
 F_network = F_network.cuda()
@@ -86,7 +104,7 @@ Y_network.cuda()
 F_network.eval() # (set in evaluation mode, this affects BatchNorm, dropout etc.)
 Y_network.eval()
 
-################ Useful functions ####################
+''''''''''''''''''''' Useful functions '''''''''''''''''''''
 def resize_img(img, img_size=416):
     h, w, _ = img.shape
     dim_diff = np.abs(h - w)
@@ -105,10 +123,57 @@ def resize_img(img, img_size=416):
     input_img = torch.from_numpy(input_img).float().unsqueeze(0)
     return input_img, img
 
+# for export the .mp4 file
+class ImgCreatorLiDAR:
+    def __init__(self):
+        self.counter = 0
+        # NOTE! you'll have to adapt this for your file structure
+        self.param = open3d.read_pinhole_camera_parameters(
+            root_dir + "visualization/camera_trajectory/" + sequence + ".json")
 
+    def move_forward(self, vis):
+        # this function is called within the Visualizer::run() loop.
+        # the run loop calls the function, then re-renders the image.
+        ctr = vis.get_view_control()
+        # set the camera view:
+        ctr.convert_from_pinhole_camera_parameters(self.param)
+
+        self.counter += 1
+
+        # (the counter is for making sure the camera view has been changed before the img is captured)
+        if self.counter > 3:
+            # capture an image:
+            img = vis.capture_screen_float_buffer()
+            img = 255*np.asarray(img)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            img = img.astype(np.uint8)
+            self.lidar_img = img
+
+            # close the window:
+            vis.destroy_window()
+
+            self.counter = 0
+
+        return False
+
+    def create_img(self, geometries):
+        vis = open3d.Visualizer()
+        vis.create_window()
+        opt = vis.get_render_option()
+        opt.background_color = np.asarray([0, 0, 0])
+        for geometry in geometries:
+            vis.add_geometry(geometry)
+        vis.register_animation_callback(self.move_forward)
+        vis.run()
+
+        return self.lidar_img
+
+
+''''''''''''''''''''' Main loop '''''''''''''''''''''
 for frame in range(len(os.listdir(img_dir))):
     img_path = img_dir + img_list[frame]
     img = np.array(Image.open(img_path))
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # Correcting color: OpenCV uses BGR as its default colour order
 
     resized_img, img = resize_img(img, img_size=416)
     input_img = Variable(resized_img.type(torch.cuda.FloatTensor))
@@ -136,15 +201,13 @@ for frame in range(len(os.listdir(img_dir))):
     unpad_h = kitti_img_size - pad_y
     unpad_w = kitti_img_size - pad_x
 
-    cur_frame_pred_seg = {}
-
     ######################## Debug visulization  #######################
     # if detection is not None:
     #     # print(img.shape)
     #     unique_labels = detection[:, -1].cpu().unique()
     #     n_cls_preds = min(len(unique_labels), 20)
     #     bbox_colors = random.sample(colors, n_cls_preds)
-    #     for x1, y1, x2, y2, conf, cls_conf, cls_pred in detection:
+    #     for x1, y1, x2, y2, conf, cls_conf, cls_pred in detection_Y:
     #         cls_pred = min(cls_pred, 8)  # refer to kitti.names
     #         print ('\t+ Label: %s, Conf: %.5f' % (classes[int(cls_pred)], cls_conf.item()))
     #         # Rescale coordinates to original dimensions
@@ -166,11 +229,59 @@ for frame in range(len(os.listdir(img_dir))):
     # cv2.destroyAllWindows()
     ####################################################################
 
+    ''''''''''''''''''''' Point cloud '''''''''''''''''''''
+    # first use the calib to get the lidar points in image coordinate
+    lidar_path = lidar_dir + lidar_list[frame]
+    point_cloud_ori = np.fromfile(lidar_path, dtype=np.float32).reshape(-1, 4)
+
+    # remove points that are located behind the camera:
+    point_cloud = point_cloud_ori[point_cloud_ori[:, 0] > 0, :]
+    # remove points that are located too far away from the camera:
+    point_cloud = point_cloud[point_cloud[:, 0] < 80, :]
+
+    #
+    point_cloud_xyz = point_cloud[:, 0:3]
+    point_cloud_xyz_hom = np.ones((point_cloud.shape[0], 4))
+    point_cloud_xyz_hom[:, 0:3] = point_cloud[:, 0:3]  # (point_cloud_xyz_hom has shape (num_points, 4))
+
+    # project the points onto the image plane (homogeneous coords):
+    img_points_hom = np.dot(P2, np.dot(R0_rect,
+                                       np.dot(Tr_velo_to_cam,
+                                              point_cloud_xyz_hom.T))).T  # (point_cloud_xyz_hom.T has shape (4, num_points))
+
+    # normalize: for calculate row mask
+    img_points = np.zeros((img_points_hom.shape[0], 2))
+    img_points[:, 0] = img_points_hom[:, 0] / img_points_hom[:, 2]
+    img_points[:, 1] = img_points_hom[:, 1] / img_points_hom[:, 2]
+
+    # transform the points into (rectified) camera (0) coordinates:
+    point_cloud_xyz_camera_hom = np.dot(R0_rect,
+                                        np.dot(Tr_velo_to_cam,
+                                               point_cloud_xyz_hom.T)).T  # (point_cloud_xyz_hom.T has shape (4, num_points))
+
+    # normalize:
+    point_cloud_xyz_camera = np.zeros((point_cloud_xyz_camera_hom.shape[0], 3))
+    point_cloud_xyz_camera[:, 0] = point_cloud_xyz_camera_hom[:, 0] / point_cloud_xyz_camera_hom[:, 3]
+    point_cloud_xyz_camera[:, 1] = point_cloud_xyz_camera_hom[:, 1] / point_cloud_xyz_camera_hom[:, 3]
+    point_cloud_xyz_camera[:, 2] = point_cloud_xyz_camera_hom[:, 2] / point_cloud_xyz_camera_hom[:, 3]
+
+    point_cloud_camera = point_cloud
+    point_cloud_camera[:, 0:3] = point_cloud_xyz_camera
+
+    cur_frame_pred_seg = {}
+
+    # for 0004 sequence, frame 153 have detection from the yolov3
+    if detection_Y is None:
+        continue
+
     # for each bounding box in each frame
     for b_indx, [x1, y1, x2, y2, conf, cls_conf, cls_pred] in enumerate(detection_Y):
         # Rescale coordinates to original dimensions
         cls_pred = min(cls_pred, 8)  # refer to kitti.names
-        print ('\t+ Label: %s, Conf: %.5f' % (classes[int(cls_pred)], cls_conf.item()))
+        # Because the frustum_PointNet is only trained for detecting Cars
+        if int(cls_pred) > 2:
+            continue
+        # print ('\t+ Label: %s, Conf: %.5f' % (classes[int(cls_pred)], cls_conf.item()))
         box_h = int(((y2 - y1) / unpad_h) * (img.shape[0]))
         box_w = int(((x2 - x1) / unpad_w) * (img.shape[1]))
         y1 = int(((y1 - pad_y // 2) / unpad_h) * (img.shape[0]))  # minimum
@@ -178,54 +289,7 @@ for frame in range(len(os.listdir(img_dir))):
         x2 = int(x1 + box_w)
         y2 = int(y1 + box_h)
 
-        ###################Get frustum points in the bounding box####################
-        # first use the calib to get the lidar points in image coordinate
-        lidar_path = lidar_dir + lidar_list[frame]
-        point_cloud_ori = np.fromfile(lidar_path, dtype=np.float32).reshape(-1, 4)
-
-        # remove points that are located behind the camera:
-        point_cloud = point_cloud_ori[point_cloud_ori[:, 0] > 0, :]
-        # remove points that are located too far away from the camera:
-        point_cloud = point_cloud[point_cloud[:, 0] < 80, :]
-
-        # Get calibration
-        calib = calibread(calib_path)
-        P2 = calib["P2"]
-        Tr_velo_to_cam_orig = calib["Tr_velo_to_cam"]  # Rigid transformation from Velodyne to (non-rectified) camera coordinates
-        R0_rect_orig = calib["R0_rect"]
-        #
-        R0_rect = np.eye(4)
-        R0_rect[0:3, 0:3] = R0_rect_orig
-        #
-        Tr_velo_to_cam = np.eye(4)
-        Tr_velo_to_cam[0:3, :] = Tr_velo_to_cam_orig
-
-        point_cloud_xyz = point_cloud[:, 0:3]
-        point_cloud_xyz_hom = np.ones((point_cloud.shape[0], 4))
-        point_cloud_xyz_hom[:, 0:3] = point_cloud[:, 0:3]  # (point_cloud_xyz_hom has shape (num_points, 4))
-
-        # project the points onto the image plane (homogeneous coords):
-        img_points_hom = np.dot(P2, np.dot(R0_rect,
-                                           np.dot(Tr_velo_to_cam, point_cloud_xyz_hom.T))).T  # (point_cloud_xyz_hom.T has shape (4, num_points))
-
-        # normalize: for calculate row mask
-        img_points = np.zeros((img_points_hom.shape[0], 2))
-        img_points[:, 0] = img_points_hom[:, 0] / img_points_hom[:, 2]
-        img_points[:, 1] = img_points_hom[:, 1] / img_points_hom[:, 2]
-
-        # transform the points into (rectified) camera (0) coordinates:
-        point_cloud_xyz_camera_hom = np.dot(R0_rect,
-                                            np.dot(Tr_velo_to_cam, point_cloud_xyz_hom.T)).T  # (point_cloud_xyz_hom.T has shape (4, num_points))
-
-        # normalize:
-        point_cloud_xyz_camera = np.zeros((point_cloud_xyz_camera_hom.shape[0], 3))
-        point_cloud_xyz_camera[:, 0] = point_cloud_xyz_camera_hom[:, 0] / point_cloud_xyz_camera_hom[:, 3]
-        point_cloud_xyz_camera[:, 1] = point_cloud_xyz_camera_hom[:, 1] / point_cloud_xyz_camera_hom[:, 3]
-        point_cloud_xyz_camera[:, 2] = point_cloud_xyz_camera_hom[:, 2] / point_cloud_xyz_camera_hom[:, 3]
-
-        point_cloud_camera = point_cloud
-        point_cloud_camera[:, 0:3] = point_cloud_xyz_camera
-
+        ''''''''''''''''''''' Get frustum points in the bounding box '''''''''''''''''''''
         # get the rwo mask using bounding box --> back to original point cloud
         row_mask = np.logical_and(
             np.logical_and(img_points[:, 0] >= x1,
@@ -237,6 +301,10 @@ for frame in range(len(os.listdir(img_dir))):
         frustum_point_cloud = point_cloud[row_mask, :]
         frustum_point_cloud_xyz_camera = point_cloud_xyz_camera[row_mask, :]
         frustum_point_cloud_camera = point_cloud_camera[row_mask, :]
+
+        if frustum_point_cloud.size == 0:
+            count_empty_frustum += 1
+            continue
 
         if frustum_point_cloud.shape[0] < 1024:
             row_idx = np.random.choice(frustum_point_cloud.shape[0], 1024, replace=True)
@@ -309,7 +377,7 @@ for frame in range(len(os.listdir(img_dir))):
         detection_TNet = detection_F[1][0].data.cpu().numpy()
         detection_TNet += np.mean(pred_seg_point_cloud, axis=0)[0:3]
 
-        ############################ Debug visulization  ############################
+        ########################### Debug visulization ############################
         #
         # axis = open3d.create_mesh_coordinate_frame(size=1, origin=[0, 0, 0])
         #
@@ -373,34 +441,56 @@ for frame in range(len(os.listdir(img_dir))):
         #
         # open3d.draw_geometries([pred_seg_point_cloud_viz, frustum_point_cloud_viz, point_cloud_camera_viz, detection_TNet_viz, axis])
         #
-        #############################################################################
+        ############################################################################
 
         if pred_seg_point_cloud.size == 0:
-            count_empty += 1
+            count_empty_pred += 1
             continue
 
         distance_pred_seg = np.min(pred_seg_point_cloud[:,0]**2 + pred_seg_point_cloud[:,1]**2 + pred_seg_point_cloud[:,2]**2)
         distance_pred_seg = np.sqrt(distance_pred_seg)
-        print ("frame: ", frame, "  b_indx: ", b_indx, "    distance: ", distance_pred_seg)
-        print ("count empty: ", count_empty)
+        # print ("frame: ", frame, "  b_indx: ", b_indx, "    distance: ", distance_pred_seg)
+        # print ("count empty predictions: ", count_empty_pred)
 
-        cur_frame_pred_seg[b_indx] = [pred_seg_point_cloud, detection_TNet, distance_pred_seg]
+        range_rate = float('nan')
+        tracking_id = -1
+        # for compare frame by frame
+        cur_frame_pred_seg[tracking_id] = [pred_seg_point_cloud, detection_TNet, distance_pred_seg, range_rate, b_indx]
 
+        ''''''''''''''''''''' Stupid tracking '''''''''''''''''''''
         if pre_frame_pred_seg:
-            dist = 100  # for calculate the distance between frames
+            dist = 1000  # for calculate the distance between frames
+
             for scoure in pre_frame_pred_seg:
-                center_pre = pre_frame_pred_seg[scoure][1]
-                dist_temp = np.linalg.norm(center_pre-detection_TNet)
+                center_pre = pre_frame_pred_seg[scoure][1]  # which is the output of TNet
+                dist_temp = np.linalg.norm(center_pre-detection_TNet)  # distance between frame
 
                 if dist_temp < dist:
                     dist = dist_temp
-                    source_id = scoure
-                    range_pre = pre_frame_pred_seg[scoure][2]
+                    tracking_id = scoure
+                    range_pre = pre_frame_pred_seg[scoure][2]  # which is the distance_pred_seg in pre_frame_pred_seg
 
-            if dist < 3:
+            if dist < 5:
                 range_rate = (distance_pred_seg - range_pre)*10
+                cur_frame_pred_seg[tracking_id] = [pred_seg_point_cloud, detection_TNet, distance_pred_seg, range_rate, b_indx]
+            else:
+                # Select unique tracking id
+                list_tracking = list(cur_frame_pred_seg.keys())
+                list_tracking.remove(-1)
+                list_remaining = [x for x in range(20) if x not in list_tracking ]
 
-            print ("Range: ", distance_pred_seg, "  Range_pre: ", range_pre, "    Range_rate:", range_rate)
+                tracking_id = list_remaining[0]
+                cur_frame_pred_seg[tracking_id] = [pred_seg_point_cloud, detection_TNet, distance_pred_seg, range_rate, b_indx]
+
+            print("Frame: ", frame, " b_indx: ", b_indx, " tracking_id", tracking_id,
+                  " distance: ", "{0:.2f}".format(dist),
+                  " Range_cur: ", "{0:.2f}".format(distance_pred_seg),
+                  " Range_pre: ", "{0:.2f}".format(range_pre),
+                  " Range_rate:", "{0:.2f}".format(range_rate))
+
+        # For the first frame
+        else:
+            cur_frame_pred_seg[b_indx] = [pred_seg_point_cloud, detection_TNet, distance_pred_seg, range_rate, b_indx]
 
         ############################ Debug visulization  ############################
         #
@@ -409,27 +499,83 @@ for frame in range(len(os.listdir(img_dir))):
         #
         # if pre_frame_pred_seg:
         #     pre_pc = open3d.PointCloud()
-        #     pre_pc.points = open3d.Vector3dVector(pre_frame_pred_seg[source_id][0][:, 0:3])
-        #     # for source in pre_frame_pred_seg:
-        #     #     source_pc = open3d.PointCloud()
-        #     #     source_pc.points = open3d.Vector3dVector(pre_frame_pred_seg[source][0][:, 0:3])
-        #         # reg_p2p = open3d.registration_icp(source_pc, target_pc, threshold_icp, np.eye(4),
-        #         #                                   open3d.TransformationEstimationPointToPoint(),
-        #         #                                   open3d.ICPConvergenceCriteria(max_iteration = 2000))
-        #         # print (reg_p2p.transformation)
+        #     if tracking_id in pre_frame_pred_seg:
+        #         pre_pc.points = open3d.Vector3dVector(pre_frame_pred_seg[tracking_id][0][:, 0:3])
         #
-        #     current_pc.paint_uniform_color([0, 1, 0])  # green
-        #     pre_pc.paint_uniform_color([1, 0, 0])  # red
-        #     axis = open3d.create_mesh_coordinate_frame(size=1, origin=[0, 0, 0])
-        #     open3d.draw_geometries([current_pc, pre_pc, axis])
+        #         current_pc.paint_uniform_color([0, 1, 0])  # green
+        #         pre_pc.paint_uniform_color([1, 0, 0])  # red
+        #         axis = open3d.create_mesh_coordinate_frame(size=1, origin=[0, 0, 0])
+        #         open3d.draw_geometries([current_pc, pre_pc, axis])
         #
         #############################################################################
 
-    pre_frame_pred_seg = cur_frame_pred_seg
+    # tracking id = -1 is just a place holder
+    cur_frame_pred_seg.pop(-1, None)
+
+    ###################### Visualize the result and save to .mp4 file #######################
+
+    img_viz = copy.deepcopy(img)
+    for b_indx, [x1, y1, x2, y2, conf, cls_conf, cls_pred] in enumerate(detection_Y):
+        # Because the frustum_PointNet is only trained for detecting Cars
+        if int(cls_pred) > 2:
+            continue
+        # build a dict map from b_indx to tracking id
+        b_indx_from_cur_frame_dict = {}
+        for tracking_id_ in cur_frame_pred_seg:
+            # [pred_seg_point_cloud, detection_TNet, distance_pred_seg, range_rate, b_indx]
+            b_indx_from_cur_frame_dict[cur_frame_pred_seg[tracking_id_][4]] = tracking_id_
+
+        if b_indx not in b_indx_from_cur_frame_dict:
+            continue
+
+        cls_pred = min(cls_pred, 8)  # refer to kitti.names
+        print('\t+ Label: %s, Conf: %.5f, b_indx: %i, tracking_id: %i'
+              % (classes[int(cls_pred)], cls_conf.item(), int(b_indx), int(b_indx_from_cur_frame_dict[b_indx])))
+        box_h = int(((y2 - y1) / unpad_h) * (img.shape[0]))
+        box_w = int(((x2 - x1) / unpad_w) * (img.shape[1]))
+        y1 = int(((y1 - pad_y // 2) / unpad_h) * (img.shape[0]))  # minimum
+        x1 = int(((x1 - pad_x // 2) / unpad_w) * (img.shape[1]))  # minimum
+        x2 = int(x1 + box_w)
+        y2 = int(y1 + box_h)
+
+        # for unique tracking id
+        color = colors[b_indx_from_cur_frame_dict[b_indx]]
+
+        cv2.putText(img_viz, classes[int(cls_pred)], (int(x1), int(y1)), cvfont, 1.5,
+                    (color[0] * 255, color[1] * 255, color[2] * 255), 2)
+        cv2.rectangle(img_viz, (int(x1), int(y1)), (int(x2), int(y2)),
+                      (color[0] * 255, color[1] * 255, color[2] * 255), 1)
+
+        # [pred_seg_point_cloud, detection_TNet, distance_pred_seg, range_rate, b_indx]
+        range_viz = cur_frame_pred_seg[b_indx_from_cur_frame_dict[b_indx]][2]
+        range_viz = "{0:.1f}".format(range_viz)
+        range_rate_viz = cur_frame_pred_seg[b_indx_from_cur_frame_dict[b_indx]][3]
+        range_rate_viz = "{0:.1f}".format(range_rate_viz)
+
+        range_rangerate_text = "R: " + str(range_viz) + " dR: " + str(range_rate_viz)
+
+        cv2.putText(img_viz, range_rangerate_text, (int(x1), int(y1 - 15)), cvfont, 1,
+                    (color[0] * 255, color[1] * 255, color[2] * 255), 2)  # put range and range_rate
+
+    cv2.imshow('frame', img_viz)
+    key = cv2.waitKey(1)
+
+    #########################################################################################
+
+    pre_frame_pred_seg = copy.deepcopy(cur_frame_pred_seg)
 
     # Calcualte fps for frustum_pointnet detection
     current_time_frustum = time.time()
     inference_time_frustum = current_time_frustum - current_time_yolo
     fps_frustum = int(1 / inference_time_frustum)
-    print("fps_frustum: ", fps_frustum)
-    print("fps_total: ", int(1 / (inference_time_frustum + inference_time_yolo)))
+    fps_total = int(1 / (inference_time_frustum + inference_time_yolo))
+    print ("fps_frustum: ", fps_frustum)
+    print ("fps_total: ", fps_total)
+    fps_frames_frustum.append(fps_frustum)
+    fps_frames_yolo.append(fps_yolo)
+    fps_frames_total.append(fps_total)
+
+# Run the code without the visualizations, print codes and .mp4 file export part! then calculate
+print ("mean fps total: ", int(np.mean(fps_frames_total)), "    yolo: ", int(np.mean(fps_frames_yolo)), "  frustum: ", int(np.mean(fps_frames_frustum)))
+print ("max fps total: ", np.max(fps_frames_total), "    yolo: ", np.max(fps_frames_yolo), "  frustum: ", np.max(fps_frames_frustum))
+print ("min fps total: ", np.min(fps_frames_total), "    yolo: ", np.min(fps_frames_yolo), "  frustum: ", np.min(fps_frames_frustum))
