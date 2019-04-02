@@ -50,7 +50,7 @@ F_weights = root_dir + "pretrained_models/model_37_2_epoch_400.pth"
 Y_weights = root_dir + 'pretrained_models/yolov3/yolov3-kitti.weights'
 Y_cfgfile = root_dir + 'config/yolov3-kitti.cfg'
 
-sequence = "0003"
+sequence = "0004"
 kitti_data_dir=root_dir + "data/kitti"
 kitti_meta_dir=root_dir + "data/kitti/meta"
 img_dir = kitti_data_dir + "/tracking/training/image_02/" + sequence + "/"
@@ -122,51 +122,6 @@ def resize_img(img, img_size=416):
     # As pytorch tensor
     input_img = torch.from_numpy(input_img).float().unsqueeze(0)
     return input_img, img
-
-# for export the .mp4 file
-class ImgCreatorLiDAR:
-    def __init__(self):
-        self.counter = 0
-        # NOTE! you'll have to adapt this for your file structure
-        self.param = open3d.read_pinhole_camera_parameters(
-            root_dir + "visualization/camera_trajectory/" + sequence + ".json")
-
-    def move_forward(self, vis):
-        # this function is called within the Visualizer::run() loop.
-        # the run loop calls the function, then re-renders the image.
-        ctr = vis.get_view_control()
-        # set the camera view:
-        ctr.convert_from_pinhole_camera_parameters(self.param)
-
-        self.counter += 1
-
-        # (the counter is for making sure the camera view has been changed before the img is captured)
-        if self.counter > 3:
-            # capture an image:
-            img = vis.capture_screen_float_buffer()
-            img = 255*np.asarray(img)
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            img = img.astype(np.uint8)
-            self.lidar_img = img
-
-            # close the window:
-            vis.destroy_window()
-
-            self.counter = 0
-
-        return False
-
-    def create_img(self, geometries):
-        vis = open3d.Visualizer()
-        vis.create_window()
-        opt = vis.get_render_option()
-        opt.background_color = np.asarray([0, 0, 0])
-        for geometry in geometries:
-            vis.add_geometry(geometry)
-        vis.register_animation_callback(self.move_forward)
-        vis.run()
-
-        return self.lidar_img
 
 
 ''''''''''''''''''''' Main loop '''''''''''''''''''''
@@ -373,7 +328,7 @@ for frame in range(len(os.listdir(img_dir))):
         row_mask_pred = detection_InstanceSeg[:, 1] > detection_InstanceSeg[:, 0]
         pred_seg_point_cloud = frustum_point_cloud[row_mask_pred, :]
 
-        # get the physical center of that segmentation
+        # get the physical center of that segmentation, used in tracking
         detection_TNet = detection_F[1][0].data.cpu().numpy()
         detection_TNet += np.mean(pred_seg_point_cloud, axis=0)[0:3]
 
@@ -463,7 +418,7 @@ for frame in range(len(os.listdir(img_dir))):
 
             for scoure in pre_frame_pred_seg:
                 center_pre = pre_frame_pred_seg[scoure][1]  # which is the output of TNet
-                dist_temp = np.linalg.norm(center_pre-detection_TNet)  # distance between frame
+                dist_temp = np.linalg.norm(center_pre - detection_TNet)  # distance between frame
 
                 if dist_temp < dist:
                     dist = dist_temp
@@ -512,7 +467,18 @@ for frame in range(len(os.listdir(img_dir))):
     # tracking id = -1 is just a place holder
     cur_frame_pred_seg.pop(-1, None)
 
-    ###################### Visualize the result and save to .mp4 file #######################
+    # Calcualte fps for frustum_pointnet detection
+    current_time_frustum = time.time()
+    inference_time_frustum = current_time_frustum - current_time_yolo
+    fps_frustum = int(1 / inference_time_frustum)
+    fps_total = int(1 / (inference_time_frustum + inference_time_yolo))
+    print("fps_frustum: ", fps_frustum)
+    print("fps_total: ", fps_total)
+    fps_frames_frustum.append(fps_frustum)
+    fps_frames_yolo.append(fps_yolo)
+    fps_frames_total.append(fps_total)
+
+    ###################### Visualize the result #######################
 
     img_viz = copy.deepcopy(img)
     for b_indx, [x1, y1, x2, y2, conf, cls_conf, cls_pred] in enumerate(detection_Y):
@@ -565,18 +531,7 @@ for frame in range(len(os.listdir(img_dir))):
 
     pre_frame_pred_seg = copy.deepcopy(cur_frame_pred_seg)
 
-    # Calcualte fps for frustum_pointnet detection
-    current_time_frustum = time.time()
-    inference_time_frustum = current_time_frustum - current_time_yolo
-    fps_frustum = int(1 / inference_time_frustum)
-    fps_total = int(1 / (inference_time_frustum + inference_time_yolo))
-    print ("fps_frustum: ", fps_frustum)
-    print ("fps_total: ", fps_total)
-    fps_frames_frustum.append(fps_frustum)
-    fps_frames_yolo.append(fps_yolo)
-    fps_frames_total.append(fps_total)
-
-# Run the code without the visualizations, print codes and .mp4 file export part! then calculate
+# Run the code without the visualizations and print part! then calculate
 print ("mean fps total: ", int(np.mean(fps_frames_total)), "    yolo: ", int(np.mean(fps_frames_yolo)), "  frustum: ", int(np.mean(fps_frames_frustum)))
 print ("max fps total: ", np.max(fps_frames_total), "    yolo: ", np.max(fps_frames_yolo), "  frustum: ", np.max(fps_frames_frustum))
 print ("min fps total: ", np.min(fps_frames_total), "    yolo: ", np.min(fps_frames_yolo), "  frustum: ", np.min(fps_frames_frustum))
