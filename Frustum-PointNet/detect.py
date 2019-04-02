@@ -540,8 +540,9 @@ for frame in range(len(os.listdir(img_dir))):
 
         # for unique tracking id
         color = colors[b_indx_from_cur_frame_dict[b_indx]]
+        title_text = str(classes[int(cls_pred)]) + ": " + str(int(b_indx_from_cur_frame_dict[b_indx]))
 
-        cv2.putText(img_viz, classes[int(cls_pred)], (int(x1), int(y1)), cvfont, 1.5,
+        cv2.putText(img_viz, title_text, (int(x1), int(y1)), cvfont, 1.5,
                     (color[0] * 255, color[1] * 255, color[2] * 255), 2)
         cv2.rectangle(img_viz, (int(x1), int(y1)), (int(x2), int(y2)),
                       (color[0] * 255, color[1] * 255, color[2] * 255), 1)
@@ -554,7 +555,7 @@ for frame in range(len(os.listdir(img_dir))):
 
         range_rangerate_text = "R: " + str(range_viz) + " dR: " + str(range_rate_viz)
 
-        cv2.putText(img_viz, range_rangerate_text, (int(x1), int(y1 - 15)), cvfont, 1,
+        cv2.putText(img_viz, range_rangerate_text, (int(x1), int(y1 - 18)), cvfont, 1,
                     (color[0] * 255, color[1] * 255, color[2] * 255), 2)  # put range and range_rate
 
     cv2.imshow('frame', img_viz)
