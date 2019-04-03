@@ -55,7 +55,7 @@ kitti_data_dir=root_dir + "data/kitti"
 kitti_meta_dir=root_dir + "data/kitti/meta"
 img_dir = kitti_data_dir + "/tracking/training/image_02/" + sequence + "/"
 lidar_dir = kitti_data_dir + "/tracking/training/velodyne/" + sequence + "/"
-label_path = kitti_data_dir + "/tracking/training/label_02/" + sequence + ".txt"
+# label_path = kitti_data_dir + "/tracking/training/label_02/" + sequence + ".txt"
 calib_path = kitti_meta_dir + "/tracking/training/calib/" + sequence + ".txt"  # NOTE! the data format for the calib files was sliightly different for tracking --> revised ones in meta folder
 
 img_list = os.listdir(img_dir)
@@ -64,6 +64,11 @@ lidar_list = os.listdir(lidar_dir)
 lidar_list.sort()
 
 ''''''''''''''''''''' Set up useful constant '''''''''''''''''''''
+# write a log file of all the print
+# Delete the previous detection.log before run
+log = open("detection.log", "a")
+sys.stdout = log
+
 classes = load_classes(root_dir + 'data/kitti.names')
 
 # for visualization Yolov3
@@ -145,7 +150,7 @@ for frame in range(len(os.listdir(img_dir))):
     current_time_yolo = time.time()
     inference_time_yolo = current_time_yolo - prev_time
     fps_yolo = int(1 / inference_time_yolo)
-    print ("fps_yolov3: ", fps_yolo)
+    # print ("fps_yolov3: ", fps_yolo)
 
     kitti_img_size = 416
     # The amount of padding that was added
@@ -227,6 +232,10 @@ for frame in range(len(os.listdir(img_dir))):
 
     # for 0004 sequence, frame 153 have detection from the yolov3
     if detection_Y is None:
+        img_viz = copy.deepcopy(img)
+        cv2.imshow("frame", img_viz)
+        print("\t+ Visualization frame: ", frame, " No Yolo detection!")
+        key = cv2.waitKey(1)
         continue
 
     # for each bounding box in each frame
@@ -235,12 +244,13 @@ for frame in range(len(os.listdir(img_dir))):
         cls_pred = min(cls_pred, 8)  # refer to kitti.names
         # Because the frustum_PointNet is only trained for detecting Cars
         if int(cls_pred) > 2:
+            print ("Frame: ", frame, " b_indx: ", b_indx, " Detect non-vehicle object: ", classes[int(cls_pred)])
             continue
         # print ('\t+ Label: %s, Conf: %.5f' % (classes[int(cls_pred)], cls_conf.item()))
         box_h = int(((y2 - y1) / unpad_h) * (img.shape[0]))
         box_w = int(((x2 - x1) / unpad_w) * (img.shape[1]))
-        y1 = int(((y1 - pad_y // 2) / unpad_h) * (img.shape[0]))  # minimum
-        x1 = int(((x1 - pad_x // 2) / unpad_w) * (img.shape[1]))  # minimum
+        y1 = int(((y1 - pad_y // 2) / unpad_h) * (img.shape[0]))  # minimum: top
+        x1 = int(((x1 - pad_x // 2) / unpad_w) * (img.shape[1]))  # minimum: left
         x2 = int(x1 + box_w)
         y2 = int(y1 + box_h)
 
@@ -259,6 +269,7 @@ for frame in range(len(os.listdir(img_dir))):
 
         if frustum_point_cloud.size == 0:
             count_empty_frustum += 1
+            print ("Frame: ", frame, " b_indx: ", b_indx, " No frustum_point_cloud! Count: ", count_empty_frustum)
             continue
 
         if frustum_point_cloud.shape[0] < 1024:
@@ -400,17 +411,18 @@ for frame in range(len(os.listdir(img_dir))):
 
         if pred_seg_point_cloud.size == 0:
             count_empty_pred += 1
+            print ("Frame: ", frame, " b_indx: ", b_indx, " No pred_seg_point_cloud! Count: ", count_empty_pred)
             continue
 
-        distance_pred_seg = np.min(pred_seg_point_cloud[:,0]**2 + pred_seg_point_cloud[:,1]**2 + pred_seg_point_cloud[:,2]**2)
-        distance_pred_seg = np.sqrt(distance_pred_seg)
+        range_pred_seg = np.min(pred_seg_point_cloud[:, 0] ** 2 + pred_seg_point_cloud[:, 1] ** 2 + pred_seg_point_cloud[:, 2] ** 2)
+        range_pred_seg = np.sqrt(range_pred_seg)
         # print ("frame: ", frame, "  b_indx: ", b_indx, "    distance: ", distance_pred_seg)
         # print ("count empty predictions: ", count_empty_pred)
 
         range_rate = float('nan')
         tracking_id = -1
         # for compare frame by frame
-        cur_frame_pred_seg[tracking_id] = [pred_seg_point_cloud, detection_TNet, distance_pred_seg, range_rate, b_indx]
+        cur_frame_pred_seg[tracking_id] = [pred_seg_point_cloud, detection_TNet, range_pred_seg, range_rate, b_indx]
 
         ''''''''''''''''''''' Stupid tracking '''''''''''''''''''''
         if pre_frame_pred_seg:
@@ -426,26 +438,30 @@ for frame in range(len(os.listdir(img_dir))):
                     range_pre = pre_frame_pred_seg[scoure][2]  # which is the distance_pred_seg in pre_frame_pred_seg
 
             if dist < 5:
-                range_rate = (distance_pred_seg - range_pre)*10
-                cur_frame_pred_seg[tracking_id] = [pred_seg_point_cloud, detection_TNet, distance_pred_seg, range_rate, b_indx]
+                range_rate = (range_pred_seg - range_pre) * 10
+                cur_frame_pred_seg[tracking_id] = [pred_seg_point_cloud, detection_TNet, range_pred_seg, range_rate, b_indx]
             else:
                 # Select unique tracking id
-                list_tracking = list(cur_frame_pred_seg.keys())
-                list_tracking.remove(-1)
+                list_tracking = list(pre_frame_pred_seg.keys())
                 list_remaining = [x for x in range(20) if x not in list_tracking ]
 
                 tracking_id = list_remaining[0]
-                cur_frame_pred_seg[tracking_id] = [pred_seg_point_cloud, detection_TNet, distance_pred_seg, range_rate, b_indx]
+                cur_frame_pred_seg[tracking_id] = [pred_seg_point_cloud, detection_TNet, range_pred_seg, range_rate, b_indx]
 
             print("Frame: ", frame, " b_indx: ", b_indx, " tracking_id", tracking_id,
                   " distance: ", "{0:.2f}".format(dist),
-                  " Range_cur: ", "{0:.2f}".format(distance_pred_seg),
+                  " Range_cur: ", "{0:.2f}".format(range_pred_seg),
                   " Range_pre: ", "{0:.2f}".format(range_pre),
-                  " Range_rate:", "{0:.2f}".format(range_rate))
+                  " Range_rate: ", "{0:.2f}".format(range_rate))
 
         # For the first frame
         else:
-            cur_frame_pred_seg[b_indx] = [pred_seg_point_cloud, detection_TNet, distance_pred_seg, range_rate, b_indx]
+            cur_frame_pred_seg[b_indx] = [pred_seg_point_cloud, detection_TNet, range_pred_seg, range_rate, b_indx]
+            print("Frame: ", frame, " b_indx: ", b_indx, " tracking_id", b_indx,
+                  " distance: ", "Initial",
+                  " Range_cur: ", "{0:.2f}".format(range_pred_seg),
+                  " Range_pre: ", "Initial",
+                  " Range_rate: ", "Initial")
 
         ############################ Debug visulization  ############################
         #
@@ -472,7 +488,7 @@ for frame in range(len(os.listdir(img_dir))):
     inference_time_frustum = current_time_frustum - current_time_yolo
     fps_frustum = int(1 / inference_time_frustum)
     fps_total = int(1 / (inference_time_frustum + inference_time_yolo))
-    print("fps_frustum: ", fps_frustum)
+    # print("fps_frustum: ", fps_frustum)
     print("fps_total: ", fps_total)
     fps_frames_frustum.append(fps_frustum)
     fps_frames_yolo.append(fps_yolo)
@@ -484,7 +500,9 @@ for frame in range(len(os.listdir(img_dir))):
     for b_indx, [x1, y1, x2, y2, conf, cls_conf, cls_pred] in enumerate(detection_Y):
         # Because the frustum_PointNet is only trained for detecting Cars
         if int(cls_pred) > 2:
+            print ("\t+ Visualization", " Frame: ", frame, " b_indx: ", b_indx, " Detect non-vehicle object: ", classes[int(cls_pred)])
             continue
+
         # build a dict map from b_indx to tracking id
         b_indx_from_cur_frame_dict = {}
         for tracking_id_ in cur_frame_pred_seg:
@@ -495,7 +513,7 @@ for frame in range(len(os.listdir(img_dir))):
             continue
 
         cls_pred = min(cls_pred, 8)  # refer to kitti.names
-        print('\t+ Label: %s, Conf: %.5f, b_indx: %i, tracking_id: %i'
+        print('\t+ Visualization Label: %s, Conf: %.5f, b_indx: %i, tracking_id: %i'
               % (classes[int(cls_pred)], cls_conf.item(), int(b_indx), int(b_indx_from_cur_frame_dict[b_indx])))
         box_h = int(((y2 - y1) / unpad_h) * (img.shape[0]))
         box_w = int(((x2 - x1) / unpad_w) * (img.shape[1]))
@@ -524,12 +542,14 @@ for frame in range(len(os.listdir(img_dir))):
         cv2.putText(img_viz, range_rangerate_text, (int(x1), int(y1 - 18)), cvfont, 1,
                     (color[0] * 255, color[1] * 255, color[2] * 255), 2)  # put range and range_rate
 
-    cv2.imshow('frame', img_viz)
+    # title = 'frame: {}'.format(str(frame))
+    cv2.imshow("frame", img_viz)
+    print ("\t+ Visualization Frame: ", frame)
     key = cv2.waitKey(1)
 
     #########################################################################################
-
     pre_frame_pred_seg = copy.deepcopy(cur_frame_pred_seg)
+    print ("#######################################################################################")
 
 # Run the code without the visualizations and print part! then calculate
 print ("mean fps total: ", int(np.mean(fps_frames_total)), "    yolo: ", int(np.mean(fps_frames_yolo)), "  frustum: ", int(np.mean(fps_frames_frustum)))
