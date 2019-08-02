@@ -162,9 +162,10 @@ for frame in range(len(os.listdir(img_dir))):
     unpad_w = kitti_img_size - pad_x
 
     ######################## Debug visulization  #######################
-    # if detection is not None:
+    #
+    # if detection_Y is not None and frame == 3:
     #     # print(img.shape)
-    #     unique_labels = detection[:, -1].cpu().unique()
+    #     unique_labels = detection_Y[:, -1].cpu().unique()
     #     n_cls_preds = min(len(unique_labels), 20)
     #     bbox_colors = random.sample(colors, n_cls_preds)
     #     for x1, y1, x2, y2, conf, cls_conf, cls_pred in detection_Y:
@@ -185,7 +186,7 @@ for frame in range(len(os.listdir(img_dir))):
     #         cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (color[0] * 255, color[1] * 255, color[2] * 255),
     #                       1)
     # cv2.imshow('frame', img)
-    # cv2.waitKey(0)
+    # cv2.waitKey(1)
     # cv2.destroyAllWindows()
     ####################################################################
 
@@ -507,7 +508,7 @@ for frame in range(len(os.listdir(img_dir))):
         b_indx_from_cur_frame_dict = {}
         for tracking_id_ in cur_frame_pred_seg:
             # [pred_seg_point_cloud, detection_TNet, distance_pred_seg, range_rate, b_indx]
-            b_indx_from_cur_frame_dict[cur_frame_pred_seg[tracking_id_][4]] = tracking_id_
+            b_indx_from_cur_frame_dict[cur_frame_pred_seg[tracking_id_][4]] = tracking_id_  # duplicate tracking id
 
         if b_indx not in b_indx_from_cur_frame_dict:
             continue

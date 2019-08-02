@@ -23,9 +23,9 @@ import sys,os,copy,math
 from munkres import Munkres
 from collections import defaultdict
 try:
-    from ordereddict import OrderedDict # can be installed using pip
+    from ordereddict import OrderedDict  # can be installed using pip
 except:
-    from collections import OrderedDict # only included from python 2.7 on
+    from collections import OrderedDict  # only included from python 2.7 on
 
 import mailpy
 
