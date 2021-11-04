@@ -6,3 +6,4 @@ pillow
 matplotlib
 visdom
 tqdm
+open3d

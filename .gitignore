@@ -59,6 +59,8 @@ target/
 
 \.idea/
 
+data/*
+
 data/KITTI/images/
 
 data/KITTI/labels/

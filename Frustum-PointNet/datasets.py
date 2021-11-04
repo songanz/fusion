@@ -3,7 +3,7 @@
 import sys
 root_dir = "/home/songanz/Documents/Git_repo/fusion/"  # change this for your own usage
 sys.path.append(root_dir + "utils")
-from kittiloader import LabelLoader2D3D, calibread, LabelLoader2D3D_sequence # (this needs to be imported before torch, because cv2 needs to be imported before torch for some reason)
+from utils.kittiloader import LabelLoader2D3D, calibread, LabelLoader2D3D_sequence # (this needs to be imported before torch, because cv2 needs to be imported before torch for some reason)
 
 import torch
 import torch.utils.data
@@ -14,12 +14,10 @@ import numpy as np
 import math
 
 # # # # # # # # # # debug visualizations START:
-# import sys
-# sys.path.append("/home/fregu856/exjobb/Open3D/build/lib")
-# from py3d import *
+# from open3d import *
 #
 # def draw_geometries_dark_background(geometries):
-#     vis = Visualizer()
+#     vis = visualization.Visualizer()
 #     vis.create_window()
 #     opt = vis.get_render_option()
 #     opt.background_color = np.asarray([0, 0, 0])
